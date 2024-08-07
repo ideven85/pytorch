@@ -116,7 +116,7 @@ Tensor qcat_nhwc_kernel(
       qx0.options().memory_format(MemoryFormat::ChannelsLast),
       scale,
       zero_point,
-      c10::nullopt);
+      std::nullopt);
 
   // N, H, and W are explicitly captured here because there's a bug in GCC5
   // and clang5 which causes an internal compiler error if they're not
@@ -597,7 +597,7 @@ void qrelu_kernel(const Tensor& qx, Tensor& qy) {
         at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
         qx.q_scale(),
         qx.q_zero_point(),
-        c10::nullopt);
+        std::nullopt);
     using Vec = Vectorized<scalar_t>;
     auto zero_point_vec = Vec(scalar_t(zero_point));
     auto iter = TensorIterator::unary_op(qy, qx);
@@ -762,7 +762,7 @@ void qgelu_kernel(const Tensor& qx, Tensor& qy, GeluType approximate) {
           at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
           output_scale,
           output_zero_point,
-          c10::nullopt);
+          std::nullopt);
       auto iter = TensorIterator::unary_op(qy, qx);
 
       using Vec = Vectorized<scalar_t>;
@@ -801,7 +801,7 @@ void qgelu_kernel(const Tensor& qx, Tensor& qy, GeluType approximate) {
           at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
           output_scale,
           output_zero_point,
-          c10::nullopt);
+          std::nullopt);
       auto iter = TensorIterator::unary_op(qy, qx);
 
       using Vec = Vectorized<scalar_t>;
@@ -846,7 +846,7 @@ void qsigmoid_kernel(
         at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
         output_scale,
         output_zero_point,
-        c10::nullopt);
+        std::nullopt);
     auto iter = TensorIterator::unary_op(qy, qx);
 
     using Vec = Vectorized<scalar_t>;
@@ -950,7 +950,7 @@ void qclamp_kernel(
         at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
         qx.q_scale(),
         qx.q_zero_point(),
-        c10::nullopt);
+        std::nullopt);
     using Vec = Vectorized<scalar_t>;
     auto iter = TensorIterator::unary_op(qy, qx);
     auto min = min_scalar.to<float>();
@@ -985,7 +985,7 @@ void qclamp_min_kernel(const Tensor& qx, const Scalar& min_scalar, Tensor& qy) {
             .memory_format(qx.suggest_memory_format()),
         qx.q_scale(),
         qx.q_zero_point(),
-        c10::nullopt);
+        std::nullopt);
     using Vec = Vectorized<scalar_t>;
     auto iter = TensorIterator::unary_op(qy, qx);
     auto min = min_scalar.to<float>();
@@ -1011,7 +1011,7 @@ void qclamp_max_kernel(const Tensor& qx, const Scalar& max_scalar, Tensor& qy) {
             .memory_format(qx.suggest_memory_format()),
         qx.q_scale(),
         qx.q_zero_point(),
-        c10::nullopt);
+        std::nullopt);
     using Vec = Vectorized<scalar_t>;
     auto iter = TensorIterator::unary_op(qy, qx);
     auto max = max_scalar.to<float>();
@@ -1053,7 +1053,7 @@ void qthreshold_kernel(
       at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
       qx.q_scale(),
       qx.q_zero_point(),
-      c10::nullopt);
+      std::nullopt);
 
     // vectorized
     using Vec = Vectorized<float>;
@@ -1171,7 +1171,7 @@ void qtanh_kernel(const Tensor& qx, Tensor& qy) {
         at::device(kCPU).dtype(SCALAR_TYPE).memory_format(qx.suggest_memory_format()),
         output_scale,
         output_zero_point,
-        c10::nullopt);
+        std::nullopt);
     auto iter = TensorIterator::unary_op(qy, qx);
 
     using Vec = Vectorized<scalar_t>;
@@ -2023,7 +2023,7 @@ void _qavg_pool_nhwc_kernel(
     int padH,
     int padD,
     bool count_include_pad,
-    c10::optional<int64_t> divisor_override) {
+    std::optional<int64_t> divisor_override) {
   T* idata = static_cast<T*>(qx.data_ptr());
   T* odata = static_cast<T*>(qy.data_ptr());
   int strideC = 1;
@@ -2135,7 +2135,7 @@ void qavg_pool2d_nhwc_kernel(
     int padW,
     int padH,
     bool count_include_pad,
-    c10::optional<int64_t> divisor_override) {
+    std::optional<int64_t> divisor_override) {
   AT_DISPATCH_QINT_TYPES(qx.scalar_type(), "avg_pool2d_nhwc", [&]() {
     _qavg_pool_nhwc_kernel<scalar_t>(
       qx,
@@ -2183,7 +2183,7 @@ void qavg_pool3d_nhwc_kernel(
     int padH,
     int padD,
     bool count_include_pad,
-    c10::optional<int64_t> divisor_override) {
+    std::optional<int64_t> divisor_override) {
   AT_DISPATCH_QINT_TYPES(qx.scalar_type(), "avg_pool3d_nhwc", [&]() {
     _qavg_pool_nhwc_kernel<scalar_t>(
       qx,
@@ -2214,7 +2214,6 @@ template <typename T>
 int64_t do_quantized_bilinear_on_AVX_n(
     const typename T::underlying*& pos1,
     typename T::underlying*& pos2,
-    int64_t input_height,
     int64_t input_width,
     int64_t output_height,
     int64_t output_width,
@@ -2288,8 +2287,8 @@ void qupsample_bilinear2d_nhwc_kernel(
     int64_t nbatch,
     int64_t channels,
     bool align_corners,
-    c10::optional<double> scales_h,
-    c10::optional<double> scales_w) {
+    std::optional<double> scales_h,
+    std::optional<double> scales_w) {
   AT_DISPATCH_QINT_TYPES(input.scalar_type(), "upsample_bilinear2d_nhwc", [&]() {
     auto* idata = static_cast<scalar_t*>(input.data_ptr());
     auto* odata = static_cast<scalar_t*>(output.data_ptr());
@@ -2338,7 +2337,6 @@ void qupsample_bilinear2d_nhwc_kernel(
         c = do_quantized_bilinear_on_AVX_n<scalar_t>(
             pos1,
             pos2,
-            input_height,
             input_width,
             output_height,
             output_width,
@@ -2940,7 +2938,7 @@ void qmean_inner_dim_kernel(
     const Tensor& self,
     OptionalIntArrayRef opt_dim,
     bool keepdim,
-    c10::optional<ScalarType> opt_dtype,
+    std::optional<ScalarType> opt_dtype,
     Tensor& result) {
   // 'opt_dtype' should be none or equal to that of input
   ScalarType dtype = self.scalar_type();
@@ -2966,7 +2964,7 @@ void qmean_inner_dim_kernel(
       at::device(kCPU).dtype(dtype).memory_format(self.suggest_memory_format()),
       self.q_scale(),
       self.q_zero_point(),
-      c10::nullopt);
+      std::nullopt);
 
   AT_DISPATCH_QINT_TYPES(self.scalar_type(), "quantized_mean_kernel_impl_cpu", [&]() {
     scalar_t* X_data = self.data_ptr<scalar_t>();
@@ -2989,7 +2987,7 @@ void qmean_inner_dim_kernel(
 void qstd_inner_dim_kernel(
     const Tensor& self,
     OptionalIntArrayRef dim,
-    const c10::optional<Scalar>& correction_opt,
+    const std::optional<Scalar>& correction_opt,
     bool keepdim,
     Tensor& result) {
   ScalarType dtype = self.scalar_type();
@@ -3020,7 +3018,7 @@ void qstd_inner_dim_kernel(
       at::device(kCPU).dtype(dtype).memory_format(self.suggest_memory_format()),
       x_scale,
       x_zp,
-      c10::nullopt);
+      std::nullopt);
 
   AT_DISPATCH_QINT_TYPES(self.scalar_type(), "quantized_std_kernel_impl_cpu", [&]() {
     scalar_t* X_data = self.data_ptr<scalar_t>();

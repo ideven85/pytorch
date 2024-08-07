@@ -1,13 +1,15 @@
+# mypy: allow-untyped-defs
+import ast
 import dataclasses
 import inspect
 import math
 import operator
 import re
+from inspect import Parameter
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
 
 import torch
 from torch._subclasses.fake_tensor import FakeTensor
-
 from torch.export import ExportedProgram
 from torch.export.exported_program import (
     _name_hoo_subgraph_placeholders,
@@ -28,6 +30,7 @@ from torch.utils._pytree import (
     tree_flatten_with_path,
     UnflattenFunc,
 )
+
 
 placeholder_prefixes = {
     InputKind.USER_INPUT: "",
@@ -74,7 +77,7 @@ def _check_input_constraints_for_graph(
     # NOTE: export already guarantees that the same symbol is used in metadata
     # for all InputDims related by equality constraints, so we can just unify
     # symbols with given input dimension values to check equality constraints.
-    unification_map: "Dict[sympy.Symbol, Any]" = {}
+    unification_map: Dict[sympy.Symbol, Any] = {}
     for (key_path, arg), node in zip(flat_args_with_path, input_placeholders):
         node_val = node.meta.get("val")
         if isinstance(node_val, FakeTensor):
@@ -118,7 +121,7 @@ def _check_input_constraints_for_graph(
                                 sympy.Eq(node_dim.node.expr, arg_dim), symbol
                             )
                             if solution is None:
-                                raise RuntimeError(  # noqa: TRY200
+                                raise RuntimeError(  # noqa: B904
                                     f"Expected input {node.name}.shape[{j}] = {arg_dim} to be "
                                     f"of the form {node_dim.node.expr}, where {symbol} is an integer"
                                 )
@@ -144,6 +147,10 @@ def _check_input_constraints_for_graph(
                                 )
                 else:
                     if arg_dim != node_dim:
+                        if isinstance(node_dim, torch.SymInt):
+                            # this means we deferred a guard from export analysis to runtime, let this pass
+                            # we'll add a runtime assert checking equality to this replacement expression
+                            continue
                         raise RuntimeError(
                             f"Expected input at {get_keystr(key_path)}.shape[{j}] to be equal to "
                             f"{node_dim}, but got {arg_dim}",
@@ -292,9 +299,9 @@ def get_lifted_tensor_constant(
 
 def sequential_split(gm: torch.fx.GraphModule, node_call_back) -> torch.fx.GraphModule:
     """
-    Splits the graph module into multiple submodules based on the node_call_back.
-    The node_call_back should return True if the node is a delimiter. Delimiter will be
-    the first node in the next submodule.
+    sequential_split creates a new graph module that splits the input graph module into multiple submodules
+    based on the node_call_back. It doesn't mutate the input graph module. The node_call_back should return
+    True if the node is a delimiter.  Delimiter will be the first node in the next submodule.
     """
     from torch.fx.passes.split_module import split_module
 
@@ -351,16 +358,13 @@ def nodes_map(nodes: List[torch.fx.Node], node_call_back) -> List[torch.fx.Node]
     return nodes
 
 
-def node_replace_(
-    old_node: torch.fx.Node, new_node: torch.fx.Node, delete_old: bool = False
-) -> None:
+def node_replace_(old_node: torch.fx.Node, new_node: torch.fx.Node) -> None:
     """
     Replace all uses of old_node with new_node.
     """
     old_node.replace_all_uses_with(new_node)
-    if delete_old:
-        old_node.users.clear()
-        old_node.graph.erase_node(old_node)
+    old_node.users.clear()
+    old_node.graph.erase_node(old_node)
 
 
 def node_inline_(call_mod_node: torch.fx.Node) -> None:
@@ -382,20 +386,28 @@ def node_inline_(call_mod_node: torch.fx.Node) -> None:
 
     for ph, arg in zip(phs, call_mod_node.args):
         assert isinstance(arg, torch.fx.Node)
-        node_replace_(ph, arg, delete_old=True)
+        node_replace_(ph, arg)
 
     with gm.graph.inserting_before(call_mod_node):
         for node in body:
             new_node = gm.graph.node_copy(node)
-            node_replace_(node, new_node, delete_old=True)
+            node_replace_(node, new_node)
 
         if len(output) > 0:
             assert len(output) == 1 and len(output[0].args) == 1
             new_output = output[0].args[0]
 
             if isinstance(new_output, torch.fx.Node):
-                node_replace_(call_mod_node, new_output, delete_old=True)
+                # Clear the users of the output node and set
+                # the users to be the users of original call_module node.
+                new_output.users.clear()
+                node_replace_(call_mod_node, new_output)
             elif isinstance(new_output, (list, tuple)):
+                # Clear the users of the output node and set
+                # the users to be the users of original call_module node.
+                for node in new_output:
+                    node.users.clear()
+
                 # Inline the get_item calls for the output node.
                 get_item_users = nodes_filter(
                     list(call_mod_node.users.keys()),
@@ -408,7 +420,6 @@ def node_inline_(call_mod_node: torch.fx.Node) -> None:
                     lambda get_item_node: node_replace_(
                         get_item_node,
                         new_output[get_item_node.args[1]],
-                        delete_old=True,
                     ),
                 )
                 call_mod_node.graph.erase_node(call_mod_node)
@@ -422,6 +433,46 @@ def node_inline_(call_mod_node: torch.fx.Node) -> None:
     gm.delete_all_unused_submodules()
     gm.recompile()
     return gm
+
+
+def _get_torch_jit_trace_forward_signature(mod: torch.nn.Module):
+    """
+    Get source code and parse argument names using AST. The function returns
+    a signature of the forward() function.
+
+    # TODO: Directly provide inspect.signature compatible TS-d module.
+    """
+    ast_mod = ast.parse(mod.code)
+    ast_func_def: ast.FunctionDef = ast_mod.body[0]  # type: ignore[assignment]
+
+    # FIXME(jiashenc): TorchScript should only allow positional or keywords arguments.
+    arg_type_map = {"args": Parameter.POSITIONAL_OR_KEYWORD}
+
+    # Traverse all argument types in AST tree and create associated parameters.
+    param_list = []
+    for arg_type, param_type in arg_type_map.items():
+        arg_name_list = [a.arg for a in getattr(ast_func_def.args, arg_type)]
+        for arg_name in arg_name_list:
+            if arg_name == "self":
+                continue  # Skip self argument.
+            param_list.append(inspect.Parameter(arg_name, param_type))
+
+    return inspect.Signature(parameters=param_list)
+
+
+def _bind_signature_to_inputs(mod, fake_args, fake_kwargs):
+    if isinstance(mod, (torch.jit.ScriptModule, torch.jit.TracedModule)):
+        sig = _get_torch_jit_trace_forward_signature(mod)
+
+        # Sanity check for placeholder names coming from TorchScript.
+        assert len(sig.parameters) == len(fake_args) + len(fake_kwargs), (
+            "Arguments other than POSITIONAL_OR_KEYWORD kinds in forward() "
+            "are not supported in _get_torch_jit_trace_forward_signature"
+        )
+    else:
+        sig = inspect.signature(mod.forward)
+
+    return sig.bind(*fake_args, **fake_kwargs).arguments
 
 
 def placeholder_naming_pass(
@@ -471,9 +522,8 @@ def placeholder_naming_pass(
     name_map: Dict[str, str] = {}
 
     # map user input names with mod.forward() signature
-    combined_args = (
-        inspect.signature(mod.forward).bind(*fake_args, **fake_kwargs).arguments
-    )
+    combined_args = _bind_signature_to_inputs(mod, fake_args, fake_kwargs)
+
     flat_args_with_path, _ = tree_flatten_with_path(combined_args)
     user_input_names = [
         spec.arg.name
@@ -562,3 +612,24 @@ def placeholder_naming_pass(
             ):
                 constants[new_name] = constant
                 del constants[name]
+
+
+def remove_proxy_from_state_dict(state_dict: Dict, in_place: bool) -> Dict:
+    """
+    If `in_place` is false, remove a new copy of `state_dict` with "proxy" removed from `v.__dict__`.
+    `v` is the values in the dictionary.
+    If `in_place` is true, modify `state_dict` in place.
+    """
+    if in_place:
+        for k, v in state_dict.items():
+            if "proxy" in v.__dict__:
+                state_dict[k] = v.clone().detach()
+        return state_dict
+    else:
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if "proxy" in v.__dict__:
+                new_state_dict[k] = v.clone().detach()
+            else:
+                new_state_dict[k] = v
+        return new_state_dict

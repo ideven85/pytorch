@@ -1,3 +1,4 @@
+# mypy: allow-untyped-defs
 import logging
 import multiprocessing
 import multiprocessing.connection
@@ -11,6 +12,7 @@ import warnings
 from typing import Optional
 
 from . import _prctl_pr_set_pdeathsig  # type: ignore[attr-defined]
+
 
 log = logging.getLogger(__name__)
 
@@ -273,9 +275,9 @@ def spawn(fn, args=(), nprocs=1, join=True, daemon=False, start_method="spawn"):
     """
     if start_method != "spawn":
         msg = (
-            "This method only supports start_method=spawn (got: %s).\n"
+            f"This method only supports start_method=spawn (got: {start_method}).\n"
             "To use a different start_method use:\n\t\t"
-            " torch.multiprocessing.start_processes(...)" % start_method
+            " torch.multiprocessing.start_processes(...)"
         )
-        warnings.warn(msg)
+        warnings.warn(msg, FutureWarning, stacklevel=2)
     return start_processes(fn, args, nprocs, join, daemon, start_method="spawn")

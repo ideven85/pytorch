@@ -36,8 +36,8 @@
 #include <c10/cuda/CUDAStream.h>
 #endif
 #include <c10/util/Exception.h>
-#include <c10/util/Optional.h>
 #include <c10/util/irange.h>
+#include <optional>
 
 #include <algorithm>
 #include <cstddef>
@@ -62,7 +62,7 @@ void clear_registered_instances(void* ptr);
 TORCH_PYTHON_API IValue toIValue(
     py::handle obj,
     const TypePtr& type,
-    c10::optional<int32_t> N = c10::nullopt);
+    std::optional<int32_t> N = std::nullopt);
 
 TORCH_PYTHON_API py::object toPyObject(IValue ivalue);
 
@@ -111,7 +111,7 @@ struct VISIBILITY_HIDDEN PythonFutureWrapper
 
   explicit PythonFutureWrapper(
       c10::intrusive_ptr<c10::ivalue::Future> fut,
-      c10::optional<UnwrapFunc> unwrap_func = c10::nullopt)
+      std::optional<UnwrapFunc> unwrap_func = std::nullopt)
       : fut(std::move(fut)), unwrap_func(std::move(unwrap_func)) {}
 
   explicit PythonFutureWrapper(const PythonFutureWrapper&) = delete;
@@ -184,7 +184,7 @@ struct VISIBILITY_HIDDEN PythonFutureWrapper
               PyErr_Clear();
             }
 
-            throw err;
+            throw std::runtime_error(err);
           }
         },
         PyObjectType::get()));
@@ -194,7 +194,8 @@ struct VISIBILITY_HIDDEN PythonFutureWrapper
     auto pf = std::make_shared<PythonFunctionGuard>(std::move(cb));
     // NOLINTNEXTLINE(modernize-avoid-bind)
     fut->addCallback(std::bind(
-        [pyFut(this->getPtr())](std::shared_ptr<PythonFunctionGuard> pf) {
+        [pyFut(this->getPtr())](
+            const std::shared_ptr<PythonFunctionGuard>& pf) {
           try {
             pybind11::gil_scoped_acquire ag;
             pf->func_(pyFut);
@@ -232,7 +233,7 @@ struct VISIBILITY_HIDDEN PythonFutureWrapper
   c10::intrusive_ptr<c10::ivalue::Future> fut;
   // unwrap_func works like a callback for the value returned by
   // PythonFutureWrapper::wait().
-  c10::optional<UnwrapFunc> unwrap_func;
+  std::optional<UnwrapFunc> unwrap_func;
 
  private:
   std::shared_ptr<PythonFutureWrapper> getPtr() {
@@ -264,9 +265,10 @@ struct VISIBILITY_HIDDEN PythonAwaitWrapper
     aw_->markCompleted(toIValue(input, type));
   }
 
-  explicit PythonAwaitWrapper(py::function pf, py::tuple args) {
+  explicit PythonAwaitWrapper(py::function pf, py::tuple args)
+      : args_(std::move(args)) {
     pyfg_ = std::make_shared<torch::jit::PythonFunctionGuard>(std::move(pf));
-    args_ = std::move(args);
+
     std::function<IValue()> f = [fg(pyfg_), &args(args_)]() {
       pybind11::gil_scoped_acquire ag;
       return toIValue(fg->func_(*args), PyObjectType::get());
@@ -348,7 +350,7 @@ inline TypedIValue toDictKeyIValue(py::handle key) {
   }
 }
 
-inline c10::optional<TypePtr> unifyOrInitializeType(
+inline std::optional<TypePtr> unifyOrInitializeType(
     const TypePtr& accum,
     const TypePtr& unify) {
   if (!accum) {
@@ -750,7 +752,7 @@ inline void guardAgainstNamedTensor(const T& var) {
 template <typename T>
 c10::intrusive_ptr<T> toCustomClass(py::handle obj) {
   static_assert(
-      std::is_base_of<CustomClassHolder, T>::value, "T is not a CustomClass");
+      std::is_base_of_v<CustomClassHolder, T>, "T is not a CustomClass");
   const auto& type = c10::getCustomClassType<c10::intrusive_ptr<T>>();
   c10::IValue ivalue = toIValue(obj, type);
   return std::move(ivalue).toCustomClass<T>();
@@ -987,7 +989,7 @@ inline Stack createStackForSchema(
     const FunctionSchema& schema,
     const tuple_slice& args,
     const py::kwargs& kwargs,
-    c10::optional<IValue> self) {
+    std::optional<IValue> self) {
   size_t all_arguments = (self ? 1 : 0) + args.size() + kwargs.size();
   if (all_arguments > schema.arguments().size()) {
     throw schema_match_error(c10::str(
@@ -1102,7 +1104,7 @@ inline py::object runAndInsertCall(
     Function& callee,
     const tuple_slice& args,
     const py::kwargs& kwargs,
-    c10::optional<IValue> self,
+    std::optional<IValue> self,
     // Lambda that tells this function how to insert `callee` into the graph if
     // we're tracing.
     const std::function<Value*(Graph&, const MatchedSchema& match)>&
@@ -1158,11 +1160,11 @@ inline py::object runAndInsertCall(
   return toPyObject(std::move(stack.back()));
 }
 
-inline c10::optional<py::object> maybeTorchFunctionDispatch(
+inline std::optional<py::object> maybeTorchFunctionDispatch(
     const py::object& callee,
     const tuple_slice& args_no_self,
     const py::kwargs& kwargs,
-    const c10::QualifiedName qualname) {
+    const c10::QualifiedName& qualname) {
   std::vector<py::handle> args_vec;
   for (const auto& arg : args_no_self) {
     args_vec.push_back(arg);
@@ -1205,7 +1207,7 @@ inline c10::optional<py::object> maybeTorchFunctionDispatch(
             /*module_name=*/qualname.prefix().c_str()));
   }
 
-  return c10::nullopt;
+  return std::nullopt;
 }
 
 inline py::object invokeScriptFunctionFromPython(
@@ -1219,7 +1221,7 @@ inline py::object invokeScriptFunctionFromPython(
       callee,
       args,
       kwargs,
-      /*self=*/c10::nullopt,
+      /*self=*/std::nullopt,
       [&](Graph& graph, const MatchedSchema& match) {
         return graph.insertFunctionCall(&callee, match);
       });
@@ -1255,27 +1257,27 @@ TORCH_PYTHON_API py::object invokeOperatorFromPython(
     const std::vector<std::shared_ptr<Operator>>& operations,
     py::args args,
     const py::kwargs& kwargs,
-    c10::optional<c10::DispatchKey> dk = c10::nullopt);
+    std::optional<c10::DispatchKey> dk = std::nullopt);
 
-TORCH_PYTHON_API py::tuple _maybe_handle_torch_function(
+TORCH_PYTHON_API std::optional<py::object> _maybe_handle_torch_function(
     const std::string& ns,
     const std::string& method_name,
     const std::string& overload_name,
     bool is_overload,
-    py::args args,
+    const py::args& args,
     const py::kwargs& kwargs);
 
 TORCH_PYTHON_API bool checkSchemaAllowFakeScriptObject(
     const FunctionSchema& schema,
-    py::args args,
+    const py::args& args,
     const py::kwargs& kwargs);
 
 TORCH_PYTHON_API py::object _get_operation_for_overload_or_packet(
     const std::vector<std::shared_ptr<Operator>>& operations,
     Symbol symbol,
-    py::args args,
+    const py::args& args,
     const py::kwargs& kwargs,
     bool is_overload,
-    c10::optional<c10::DispatchKey> dk = c10::nullopt);
+    std::optional<c10::DispatchKey> dk = std::nullopt);
 
 } // namespace torch::jit

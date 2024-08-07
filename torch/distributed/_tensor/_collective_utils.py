@@ -1,24 +1,27 @@
+# mypy: allow-untyped-defs
 import logging
 import math
 from dataclasses import dataclass
 from functools import lru_cache
-
 from typing import List, Optional
 
 import torch
 import torch.distributed._functional_collectives as funcol
 import torch.distributed._tensor.placement_types as placement_types
+from torch._C._distributed_c10d import _resolve_process_group
 from torch.distributed.device_mesh import _mesh_resources, DeviceMesh
 from torch.distributed.distributed_c10d import (
     _get_group_size_by_name,
     broadcast,
     get_global_rank,
+    get_group_rank,
     get_rank,
     GroupMember,
     ProcessGroup,
     scatter,
     Work,
 )
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,12 @@ if not torch._running_with_deploy():
     def _shard_dim_alltoall_meta(input, gather_dim, shard_dim, group_name):
         group_size = _get_group_size_by_name(group_name)
         stacked_list = [torch.empty_like(input) for _ in range(group_size)]
-        return torch.cat(stacked_list, dim=gather_dim).chunk(group_size, dim=shard_dim)
+        group = _resolve_process_group(group_name)
+        group_rank = get_group_rank(group, get_rank())
+
+        return torch.cat(stacked_list, dim=gather_dim).chunk(group_size, dim=shard_dim)[
+            group_rank
+        ]
 
 else:
     import warnings
@@ -42,6 +50,8 @@ else:
 def shard_dim_alltoall(input, gather_dim, shard_dim, mesh, mesh_dim):
     if mesh.device_type == "cpu":
         # Gloo does not support alltoall, so falling back to allgather + chunk
+
+        # TODO: This logs way too much
         logger.warning(
             "CPU process group does not support alltoall yet, falling back with allgather + chunk!"
         )
@@ -173,6 +183,45 @@ def unpad_tensor(tensor: torch.Tensor, pad_dim: int, pad_size: int) -> torch.Ten
         start=0,
         length=tensor.size(pad_dim) - pad_size,
     )
+
+
+def fill_empty_tensor_to_shards(
+    shards: List[torch.Tensor], shard_dim: int, num_empty_tensors: int
+) -> List[torch.Tensor]:
+    if num_empty_tensors == 0:
+        return shards
+    tensor_size = list(shards[0].size())
+    tensor_size = [
+        size if idx != shard_dim else 0 for idx, size in enumerate(tensor_size)
+    ]
+    tensor = shards[0].new_zeros(tensor_size)
+    for _ in range(num_empty_tensors):
+        shards.append(tensor)
+    return shards
+
+
+def check_tensor_meta(
+    local_tensor, check_shape_stride=False
+) -> Optional["placement_types.TensorMeta"]:
+    local_metadata = {
+        "dtype": local_tensor.dtype,
+        "requires_grad": local_tensor.requires_grad,
+    }
+
+    if check_shape_stride:
+        local_metadata.update(
+            {"shape": local_tensor.shape, "stride": local_tensor.stride()}
+        )
+
+    gathered_metadata = [None for _ in range(torch.distributed.get_world_size())]
+    torch.distributed.all_gather_object(gathered_metadata, local_metadata)
+
+    # Check if metadata is consistent across ranks
+    if not all(meta == local_metadata for meta in gathered_metadata):
+        raise ValueError(
+            "Inconsistent tensor metadata (including shape and stride) across ranks."
+        )
+    return None
 
 
 def spec_to_bytes(spec: "placement_types.DTensorSpec") -> int:

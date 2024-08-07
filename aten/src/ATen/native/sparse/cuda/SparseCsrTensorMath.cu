@@ -389,7 +389,7 @@ struct Reduction...Op {
 };
 
 
-Tensor _sparse_csr_..._cuda(const Tensor& input, IntArrayRef dims_to_sum, bool keepdim, c10::optional<ScalarType> dtype) {
+Tensor _sparse_csr_..._cuda(const Tensor& input, IntArrayRef dims_to_sum, bool keepdim, std::optional<ScalarType> dtype) {
   ...
       result = reduce_sparse_csr_cuda_template<scalar_t>(input_, dims_to_sum, keepdim, Reduction...Op<scalar_t>());
   ...
@@ -479,9 +479,8 @@ Tensor reduce_sparse_csr_dim0_cuda_template(const Tensor& sparse, ReductionOp ro
   Tensor values = sparse.values();
   auto ncols = sparse.size(1);
   auto nnz = col_indices.numel();
-  Tensor new_col_indices;
 
-  std::tie(new_col_indices, std::ignore) = at::_unique(col_indices, true, false);
+  auto new_col_indices = std::get<0>(at::_unique(col_indices, true, false));
   auto new_nnz = new_col_indices.numel();
   Tensor new_crow_indices = at::tensor(ArrayRef<int64_t>{0, new_nnz}, col_indices.options());
 
@@ -708,7 +707,7 @@ struct ReductionMulOp {
 
 } // namespace
 
-Tensor _sparse_csr_sum_cuda(const Tensor& input, IntArrayRef dims_to_sum, bool keepdim, c10::optional<ScalarType> dtype) {
+Tensor _sparse_csr_sum_cuda(const Tensor& input, IntArrayRef dims_to_sum, bool keepdim, std::optional<ScalarType> dtype) {
   ScalarType dtype_ = dtype.value_or(input.scalar_type());
   Tensor input_ = at::sparse_csr::to_type(input, dtype_);
   Tensor result;
@@ -724,7 +723,7 @@ Tensor _sparse_csr_sum_cuda(const Tensor& input, IntArrayRef dims_to_sum, bool k
   return result;
 }
 
-Tensor _sparse_csr_prod_cuda(const Tensor& input, IntArrayRef dims_to_reduce, bool keepdim, c10::optional<ScalarType> dtype) {
+Tensor _sparse_csr_prod_cuda(const Tensor& input, IntArrayRef dims_to_reduce, bool keepdim, std::optional<ScalarType> dtype) {
   ScalarType dtype_ = dtype.value_or(input.scalar_type());
   Tensor input_ = input.to(dtype_);
   Tensor result;
